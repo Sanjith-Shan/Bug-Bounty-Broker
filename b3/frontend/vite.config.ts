@@ -7,10 +7,12 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        // Use 127.0.0.1 (not localhost) to avoid macOS preferring IPv6,
-        // which can collide with other dev tools binding ::1:3000.
-        target: process.env.VITE_API_URL || "http://127.0.0.1:3000",
+        // Default to the LIVE deployed TEE agent on EigenCompute.
+        // Override with `VITE_API_URL=http://127.0.0.1:3000 npm run dev` to
+        // hit the local backend instead.
+        target: process.env.VITE_API_URL || "https://34-126-104-240.nip.io",
         changeOrigin: true,
+        secure: false,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
     },
