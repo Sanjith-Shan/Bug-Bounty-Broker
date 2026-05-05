@@ -1,0 +1,18 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      "/api": {
+        // Use 127.0.0.1 (not localhost) to avoid macOS preferring IPv6,
+        // which can collide with other dev tools binding ::1:3000.
+        target: process.env.VITE_API_URL || "http://127.0.0.1:3000",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+    },
+  },
+});

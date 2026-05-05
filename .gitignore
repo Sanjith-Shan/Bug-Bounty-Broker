@@ -1,0 +1,48 @@
+# --- secrets / local config (NEVER commit) ---
+.env
+.env.local
+.env.production
+.env.*.local
+*.key
+*.pem
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node / Vite ---
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+
+# --- Foundry ---
+out/
+cache/
+broadcast/
+# forge-std + other deps installed via `forge install`. Anyone cloning runs:
+#   forge install foundry-rs/forge-std --no-git
+b3/agent/lib/
+
+# --- Runtime data ---
+b3/agent/data/
+b3/agent/work/
+*.db
+*.db-journal
+
+# --- macOS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursor/
+
+# --- Background/log artifacts ---
+*.log

@@ -1,0 +1,19 @@
+# Caddy fronts the FastAPI app inside the TEE. ${DOMAIN} is supplied by
+# `ecloud compute app configure tls`; Let's Encrypt certs are provisioned
+# automatically inside the enclave.
+
+{$DOMAIN} {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:{$APP_PORT}
+
+    # Conservative rate limiting per IP (best-effort; not auth).
+    @api path /submit /deposit/*
+    handle @api {
+        reverse_proxy 127.0.0.1:{$APP_PORT}
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

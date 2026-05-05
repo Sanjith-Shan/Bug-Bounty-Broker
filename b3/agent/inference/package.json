@@ -1,0 +1,14 @@
+{
+  "name": "b3-inference",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "B3 inference sidecar — calls EigenCloud AI Gateway from a small Node process spawned by the Python agent.",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
