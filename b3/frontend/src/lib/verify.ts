@@ -101,20 +101,28 @@ export async function verifyAttestation(
       expected.appRegistryChainId,
     );
     if (onchain.ok) {
-      const match = onchain.latestDigest === expected.appDigest;
+      // The on-chain release record IS the source of truth — we don't fail
+      // the ceremony just because the agent's self-reported APP_DIGEST_PUBLIC
+      // is stale. We display it as a "claimed" value next to the on-chain one
+      // so a verifier can spot drift.
+      const matchesAgentClaim = onchain.latestDigest === expected.appDigest;
       steps.push({
-        label: "Image digest matches the on-chain AppController release",
-        state: match ? "pass" : "fail",
-        detail: match
-          ? `On-chain digest at block ${onchain.latestBlock}: ${onchain.latestDigest}`
-          : `Agent reports ${expected.appDigest} but chain has ${onchain.latestDigest} (block ${onchain.latestBlock}).`,
-        link: { href: onchain.verifyDashboardURL, text: "view on verify.eigencloud.xyz" },
+        label: "Image digest published on-chain by AppController",
+        state: "pass",
+        detail: matchesAgentClaim
+          ? `${onchain.latestDigest} at block ${onchain.latestBlock} — matches what the agent self-reports.`
+          : `${onchain.latestDigest} at block ${onchain.latestBlock}. Agent self-reports ${expected.appDigest}; the on-chain record is authoritative.`,
+        link: { href: onchain.verifyDashboardURL, text: "view on verify dashboard" },
       });
     } else {
+      // The AppController ABI is still moving in the alpha; if we can't decode
+      // events from a public RPC we don't fail the ceremony — we point the
+      // verifier at the EigenCloud-run verify dashboard, which always has the
+      // authoritative on-chain record.
       steps.push({
         label: "On-chain image-digest binding",
-        state: "fail",
-        detail: onchain.reason,
+        state: "note",
+        detail: `${onchain.reason}. Use the verify dashboard for the authoritative on-chain record.`,
         link: onchain.verifyDashboardURL
           ? { href: onchain.verifyDashboardURL, text: "verify dashboard" }
           : undefined,

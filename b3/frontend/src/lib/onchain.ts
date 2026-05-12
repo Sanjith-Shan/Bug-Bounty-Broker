@@ -152,18 +152,30 @@ export async function readLatestAppRelease(
   void appUpgradedTopic();
   const c = client(chainId);
   try {
-    // The AppController has been live since early 2026; scanning the full
-    // history is fine on sepolia. On mainnet we cap the lookback to ~2M
-    // blocks to stay friendly to free RPCs.
+    // Free Sepolia RPCs cap eth_getLogs at 50k blocks (~7 days at 12s/block).
+    // We scan in 50k-block windows backwards from head until we find the
+    // most recent AppUpgraded event for this app, or run out of recent
+    // history. Mainnet RPCs usually allow larger windows; we use 2M there.
+    const WINDOW = chainId === 1 ? 2_000_000n : 49_000n;
+    const MAX_WINDOWS = chainId === 1 ? 1 : 20; // ~14 days on sepolia
     const latest = await c.getBlockNumber();
-    const fromBlock = chainId === 1 && latest > 2_000_000n ? latest - 2_000_000n : 0n;
-    const logs = await c.getLogs({
-      address: ac,
-      event: APP_CONTROLLER_ABI[0],
-      args: { app: appAddress },
-      fromBlock,
-      toBlock: "latest",
-    });
+    let logs: Awaited<ReturnType<typeof c.getLogs>> = [];
+    for (let i = 0; i < MAX_WINDOWS; i++) {
+      const toBlock = latest - BigInt(i) * WINDOW;
+      const fromBlock = toBlock > WINDOW ? toBlock - WINDOW : 0n;
+      const found = await c.getLogs({
+        address: ac,
+        event: APP_CONTROLLER_ABI[0],
+        args: { app: appAddress },
+        fromBlock,
+        toBlock,
+      });
+      if (found.length > 0) {
+        logs = found;
+        break;
+      }
+      if (fromBlock === 0n) break;
+    }
     if (logs.length === 0) {
       return {
         ok: false,
