@@ -16,7 +16,8 @@ with the TEE-sealed BIP-39 wallet, and gates the full report on a USDC deposit.
 │   ┌───────────────────────────────────┴──────────────────────────────────────────┐       │
 │   │ routes/                          services/                                   │       │
 │   │   bounties.py     ──────────►    exploit_verifier.py  (forge test --fork-url)│       │
-│   │   submissions.py  ──────────►    severity_assessor.py (EigenAI qwen3 + sig)  │       │
+│   │   submissions.py  ──────────►    severity_assessor.py ──► inference sidecar │       │
+│   │                                    (@layr-labs/ai-gateway-provider, JWT auto)│       │
 │   │   attestations.py ──────────►    signer.py            (eth_account, BIP-39)  │       │
 │   │   payments.py     ──────────►    escrow.py            (web3 USDC poll)       │       │
 │   │                                  crypto.py            (PoC encryption)       │       │
@@ -24,9 +25,11 @@ with the TEE-sealed BIP-39 wallet, and gates the full report on a USDC deposit.
 │   └──────────────────────────────────────────────────────────────────────────────┘       │
 │                                                                                          │
 │   .env (sealed by KMS)                                                                   │
-│     ├── EIGENAI_API_KEY                                                                  │
+│     ├── EIGEN_GATEWAY_URL / EIGEN_MODEL / EIGEN_SEED                                     │
+│     ├── KMS_SERVER_URL + KMS_PUBLIC_KEY  ◄── auto-injected, attests for JWT              │
 │     ├── MNEMONIC                  ◄── injected by EigenCompute, BIP-39, deterministic    │
 │     ├── AGENT_ADDRESS_PUBLIC      ◄── visible to clients                                 │
+│     ├── APP_ID_PUBLIC             ◄── anchor for on-chain digest lookup                  │
 │     ├── APP_DIGEST_PUBLIC                                                                │
 │     └── SUPPORTED_CHAINS_PUBLIC                                                          │
 │                                                                                          │
@@ -34,11 +37,12 @@ with the TEE-sealed BIP-39 wallet, and gates the full report on a USDC deposit.
                            │                                          │
                            ▼                                          ▼
               ┌──────────────────────────┐              ┌──────────────────────────┐
-              │ EigenAI                  │              │ Base Sepolia + Mainnets  │
+              │ EigenAI AI Gateway       │              │ Base Sepolia + Mainnets  │
               │ /v1/chat/completions     │              │   - fork target via RPC  │
-              │ qwen3-32b-128k-bf16      │              │   - USDC transfer events │
-              │ x-api-key, seed=42       │              │   - on-chain app registry│
-              │ returns .signature       │              │     (image digest → addr)│
+              │ claude-sonnet-4.6 /      │              │   - USDC transfer events │
+              │   gpt-oss-120b-f16       │              │   - on-chain app registry│
+              │ Bearer JWT, seed=42      │              │   (AppController →       │
+              │ receipt + signature      │              │    Release.digest)       │
               └──────────────────────────┘              └──────────────────────────┘
                            ▲                                          ▲
                            │                                          │
