@@ -4,10 +4,7 @@
 > **without revealing them first**, produces a deterministic CVSS attestation,
 > and only releases the exploit details after the bounty is paid.
 
-Built for the [Eigen Labs Private Preview](https://blog.eigencloud.xyz/eigencloud-brings-verifiable-ai-to-mass-market-with-eigenai-and-eigencompute-launches/).
 Live at **<https://b3-frontend-tawny.vercel.app/>**.
-On-chain app id: [`0x7F55207baD0c224D92524BFCD2552c5893Dd7a98`](https://verify-sepolia.eigencloud.xyz/app/0x7F55207baD0c224D92524BFCD2552c5893Dd7a98)
-on Sepolia.
 
 ---
 
