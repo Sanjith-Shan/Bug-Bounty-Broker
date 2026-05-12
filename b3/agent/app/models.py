@@ -82,6 +82,8 @@ class HealthResponse(BaseModel):
     status: str
     agent_address: str
     app_digest: str
+    app_id: Optional[str] = None
+    app_registry_chain_id: int = 11155111
     supported_chains: List[int]
     fee_bps: int
     domain: Optional[str] = None

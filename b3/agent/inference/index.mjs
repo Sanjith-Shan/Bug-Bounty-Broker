@@ -1,53 +1,47 @@
 #!/usr/bin/env node
 // B3 inference sidecar.
 //
-// Reads one JSON request from stdin, posts to the EigenCloud AI Gateway,
-// writes one JSON result to stdout, exits.
+// Reads one JSON request from stdin, calls the EigenCloud AI Gateway through
+// the official `@layr-labs/ai-gateway-provider` (which auto-handles the
+// TEE-attested JWT flow when KMS_SERVER_URL + KMS_PUBLIC_KEY are set, and
+// falls back to KMS_AUTH_JWT for local dev), then writes the full result —
+// including the raw gateway response body AND response headers — to stdout.
+//
+// We hand the Python layer everything the gateway emits so it can extract
+// any receipt / signature the gateway publishes today (the exact field
+// names are not yet stable) without us guessing.
 //
 // Stdin shape:
 //   {
 //     "model":       "anthropic/claude-sonnet-4.6" | "gpt-oss-120b-f16" | ...
-//     "messages":    [{ "role": "user" | "system" | "assistant", "content": "..." }, ...],
-//     "seed":        42,
-//     "temperature": 0.0,
-//     "max_tokens":  600
+//     "messages":    [{ "role": "system|user|assistant", "content": "..." }, ...],
+//     "seed":        42,             // optional, for determinism
+//     "temperature": 0.0,            // optional
+//     "max_tokens":  600             // optional
 //   }
 //
 // Stdout shape (success):
 //   {
-//     "ok":            true,
-//     "text":          "<assistant text>",
-//     "model":         "<actual model id used>",
-//     "usage":         { ... },
-//     "request_body":  { ...exact body we POSTed... },
-//     "response_body": { ...full gateway JSON... }   // contains receipt / signature if present
+//     "ok":              true,
+//     "text":            "<assistant text>",
+//     "model":           "<actual model id reported by the gateway>",
+//     "usage":           { "promptTokens":…, "completionTokens":…, "totalTokens":… },
+//     "request_body":    { …exact OpenAI-shape body the provider posted… },
+//     "response_body":   { …full gateway JSON; contains the receipt/signature if any… },
+//     "response_headers":{ …all response headers… }
 //   }
 //
 // Stdout shape (failure):
 //   { "ok": false, "error": "<message>" }
 //
 // Env:
-//   EIGEN_GATEWAY_URL   default https://ai-gateway-dev.eigencloud.xyz
-//   KMS_AUTH_JWT        bearer JWT (local dev). In TEE, will fall back to
-//                       /run/container_launcher/attestation_verifier_claims_token if unset.
+//   EIGEN_GATEWAY_URL    default https://ai-gateway-dev.eigencloud.xyz
+//   KMS_AUTH_JWT         bearer JWT (local-dev override; bypasses attestation)
+//   KMS_SERVER_URL       set automatically inside EigenCompute TEE
+//   KMS_PUBLIC_KEY       set automatically inside EigenCompute TEE
 
-import { readFileSync } from "node:fs";
-
-const GATEWAY_URL =
-  process.env.EIGEN_GATEWAY_URL || "https://ai-gateway-dev.eigencloud.xyz";
-
-const TEE_JWT_PATH = "/run/container_launcher/attestation_verifier_claims_token";
-
-function readJwt() {
-  if (process.env.KMS_AUTH_JWT) return process.env.KMS_AUTH_JWT;
-  try {
-    const t = readFileSync(TEE_JWT_PATH, "utf8").trim();
-    if (t) return t;
-  } catch {
-    // not in TEE — fall through
-  }
-  return null;
-}
+import { createEigenGateway } from "@layr-labs/ai-gateway-provider";
+import { generateText } from "ai";
 
 async function readStdin() {
   const chunks = [];
@@ -59,6 +53,18 @@ function emit(obj) {
   process.stdout.write(JSON.stringify(obj));
 }
 
+function buildProviderConfig() {
+  const baseURL = process.env.EIGEN_GATEWAY_URL || "https://ai-gateway-dev.eigencloud.xyz";
+  const jwt = process.env.KMS_AUTH_JWT || undefined;
+  const kmsServerURL = process.env.KMS_SERVER_URL;
+  const kmsPublicKey = process.env.KMS_PUBLIC_KEY;
+  const attestConfig =
+    kmsServerURL && kmsPublicKey
+      ? { kmsServerURL, kmsPublicKey, audience: "llm-proxy" }
+      : undefined;
+  return { baseURL, jwt, attestConfig, debug: process.env.DEBUG === "true" };
+}
+
 async function main() {
   let req;
   try {
@@ -68,80 +74,52 @@ async function main() {
     process.exit(2);
   }
 
-  const jwt = readJwt();
-  if (!jwt) {
+  const cfg = buildProviderConfig();
+  if (!cfg.jwt && !cfg.attestConfig) {
     emit({
       ok: false,
       error:
-        "no JWT — set KMS_AUTH_JWT for local dev, or run inside an EigenCompute TEE",
+        "no auth — inside EigenCompute KMS_SERVER_URL+KMS_PUBLIC_KEY are auto-injected; for local dev set KMS_AUTH_JWT",
     });
     process.exit(3);
   }
 
-  const requestBody = {
-    model: req.model,
-    messages: req.messages,
-    ...(req.seed != null ? { seed: req.seed } : {}),
-    ...(req.temperature != null ? { temperature: req.temperature } : {}),
-    ...(req.max_tokens != null ? { max_tokens: req.max_tokens } : {}),
-  };
+  const gateway = createEigenGateway(cfg);
+  const model = gateway(req.model);
 
-  const url = `${GATEWAY_URL.replace(/\/+$/, "")}/v1/chat/completions`;
-  let resp;
+  // generateText accepts either `prompt` or `messages`. We always have
+  // messages from the Python layer.
+  const opts = {
+    model,
+    messages: req.messages,
+  };
+  if (req.seed != null) opts.seed = req.seed;
+  if (req.temperature != null) opts.temperature = req.temperature;
+  if (req.max_tokens != null) opts.maxOutputTokens = req.max_tokens;
+
+  let result;
   try {
-    resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${jwt}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
+    result = await generateText(opts);
   } catch (e) {
-    emit({ ok: false, error: `network error: ${e.message}` });
+    emit({ ok: false, error: `gateway call failed: ${e?.message || String(e)}` });
     process.exit(4);
   }
 
-  const raw = await resp.text();
-  let body;
-  try {
-    body = JSON.parse(raw);
-  } catch {
-    emit({
-      ok: false,
-      error: `gateway returned non-JSON (${resp.status}): ${raw.slice(0, 500)}`,
-    });
-    process.exit(5);
-  }
-
-  if (!resp.ok) {
-    emit({
-      ok: false,
-      error: `gateway error ${resp.status}: ${
-        body?.error?.message || body?.message || raw.slice(0, 500)
-      }`,
-    });
-    process.exit(6);
-  }
-
-  const choice = body?.choices?.[0];
-  const text =
-    typeof choice?.message?.content === "string"
-      ? choice.message.content
-      : Array.isArray(choice?.message?.content)
-      ? choice.message.content
-          .filter((p) => p?.type === "text")
-          .map((p) => p.text)
-          .join("")
-      : "";
+  // Extract structured fields. ai SDK exposes response.body (raw JSON from
+  // the gateway) and response.headers — these are where any receipt /
+  // signature material lives.
+  const respBody = result.response?.body ?? null;
+  const respHeaders = result.response?.headers ?? {};
+  const reqBody = result.request?.body ?? null;
 
   emit({
     ok: true,
-    text,
-    model: body.model || req.model,
-    usage: body.usage || null,
-    request_body: requestBody,
-    response_body: body,
+    text: result.text || "",
+    model: result.response?.modelId || req.model,
+    usage: result.usage || null,
+    request_body: reqBody,
+    response_body: respBody,
+    response_headers: respHeaders,
   });
 }
 

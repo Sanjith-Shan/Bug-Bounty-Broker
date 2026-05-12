@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # --- public (visible to clients via /health, /verify) ---
     AGENT_ADDRESS_PUBLIC: str = ""
     APP_DIGEST_PUBLIC: str = "sha256:local-dev"
+    # The 20-byte address that AppController assigned to this app on deploy.
+    # The frontend uses this to read the on-chain release record (digest +
+    # public env vars). Get it from `ecloud compute app info` after deploy.
+    APP_ID_PUBLIC: str = ""
+    # Chain id on which AppController is deployed (1 = mainnet, 11155111 = sepolia)
+    APP_REGISTRY_CHAIN_ID_PUBLIC: int = 11155111
     SUPPORTED_CHAINS_PUBLIC: str = "1,8453,84532,137"
     FEE_BPS_PUBLIC: int = 500  # 5%
 

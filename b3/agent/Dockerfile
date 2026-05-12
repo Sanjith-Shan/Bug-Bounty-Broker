@@ -35,6 +35,12 @@ RUN mkdir -p /app/lib \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Inference sidecar — uses @layr-labs/ai-gateway-provider for TEE-attested
+# JWT auth against the EigenCloud AI Gateway. Installed at build time so the
+# enclave needs no network at first call.
+COPY inference/package.json ./inference/package.json
+RUN cd /app/inference && npm install --omit=dev --no-audit --no-fund
+
 # App code
 COPY app/ ./app/
 COPY inference/ ./inference/

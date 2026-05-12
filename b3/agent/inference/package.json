@@ -1,14 +1,18 @@
 {
   "name": "b3-inference",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "B3 inference sidecar — calls EigenCloud AI Gateway from a small Node process spawned by the Python agent.",
+  "description": "B3 inference sidecar — calls EigenCloud AI Gateway through the official @layr-labs/ai-gateway-provider so attestation-based JWT auth works without us reimplementing the KMS flow.",
   "main": "index.mjs",
   "scripts": {
     "start": "node index.mjs"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@layr-labs/ai-gateway-provider": "^1.0.1",
+    "ai": "^6.0.168"
   }
 }

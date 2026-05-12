@@ -1,128 +1,195 @@
 import { verifyMessage } from "ethers";
+import type { Hex } from "viem";
 import type { Attestation, AttestationData, VerifyResponse } from "./api";
+import {
+  KEY_REGISTRAR,
+  readLatestAppRelease,
+  verifyDashboardUrl,
+  type OnchainAppState,
+  type OnchainAppError,
+} from "./onchain";
 
 /**
  * Reproduce the canonical message the agent signed. Must match Python's
  * `json.dumps(data, sort_keys=True, separators=(",", ":"))` byte for byte.
  */
 export function canonicalize(data: AttestationData): string {
-  // JSON.stringify with a sorted-key replacer.
   return JSON.stringify(data, Object.keys(data).sort());
 }
 
+export type Step = {
+  label: string;
+  state: "pass" | "fail" | "pending" | "note";
+  detail?: string;
+  link?: { href: string; text: string };
+};
+
 export type VerificationOutcome = {
-  agentSignerOk: boolean;
   agentRecoveredAddress: string;
   expectedSigner: string;
 
   eigenaiSignerRecovered: string | null;
   eigenaiMessage: string;
   eigenaiSignaturePresent: boolean;
+  eigenaiKeyRegistrar: string;
+  eigenaiKeyRegistrarChainId: number;
 
-  digestMatch: boolean;
+  onchain: OnchainAppState | OnchainAppError | null;
+  steps: Step[];
+};
+
+export type ExpectedAnchors = {
+  agentAddress: string;
   appDigest: string;
-
-  steps: { label: string; ok: boolean; detail?: string }[];
+  appId?: string | null;
+  appRegistryChainId: number;
 };
 
 export async function verifyAttestation(
   v: VerifyResponse,
-  expected: { agentAddress: string; appDigest: string },
+  expected: ExpectedAnchors,
 ): Promise<VerificationOutcome> {
   const att: Attestation = v.attestation;
-  const steps: VerificationOutcome["steps"] = [];
+  const steps: Step[] = [];
 
-  // 1. Reconstruct canonical message and verify the agent signature.
+  // ─── 1. Canonical message bytes ─────────────────────────────────────────
   const canonical = canonicalize(att.data);
   const matchesServer = canonical === v.canonical_message;
   steps.push({
-    label: "Canonical message matches server-rendered bytes",
-    ok: matchesServer,
-    detail: matchesServer ? undefined : "client and server disagree on canonicalization",
+    label: "Canonical attestation bytes reproducible in browser",
+    state: matchesServer ? "pass" : "fail",
+    detail: matchesServer
+      ? "Client and server produce byte-identical canonical JSON."
+      : "Mismatch — client and server disagree on the canonical encoding.",
   });
 
+  // ─── 2. Agent signer recovery ───────────────────────────────────────────
   let agentRecovered = "";
   try {
     agentRecovered = verifyMessage(canonical, att.agent_signature);
   } catch (e) {
-    steps.push({ label: "Recover agent signer", ok: false, detail: String(e) });
+    steps.push({
+      label: "Recover TEE wallet signer",
+      state: "fail",
+      detail: String(e),
+    });
   }
   const agentSignerOk =
     !!agentRecovered &&
     agentRecovered.toLowerCase() === expected.agentAddress.toLowerCase();
   steps.push({
-    label: `Agent signer matches ${shorten(expected.agentAddress)}`,
-    ok: agentSignerOk,
-    detail: agentRecovered ? `recovered ${shorten(agentRecovered)}` : undefined,
+    label: `TEE wallet signature recovers to ${shorten(expected.agentAddress)}`,
+    state: agentSignerOk ? "pass" : "fail",
+    detail: agentRecovered
+      ? `Recovered ${shorten(agentRecovered)}`
+      : "Signature did not recover.",
   });
 
-  // 2. EigenAI signature: build the verification message per the spec.
-  // In local-dev / stub mode the gateway isn't called, so the signature is
-  // empty; we mark the step as "skipped" rather than failed so the ceremony
-  // can still go fully green when running off-TEE.
+  // ─── 3. On-chain release record ─────────────────────────────────────────
+  let onchain: OnchainAppState | OnchainAppError | null = null;
+  if (!expected.appId) {
+    steps.push({
+      label: "On-chain image-digest binding",
+      state: "note",
+      detail:
+        "Agent did not publish APP_ID_PUBLIC. Set it from `ecloud compute app info` so verifiers can read the release record on-chain.",
+      link: { href: "https://verify.eigencloud.xyz", text: "verify dashboard" },
+    });
+  } else {
+    onchain = await readLatestAppRelease(
+      expected.appId as Hex,
+      expected.appRegistryChainId,
+    );
+    if (onchain.ok) {
+      const match = onchain.latestDigest === expected.appDigest;
+      steps.push({
+        label: "Image digest matches the on-chain AppController release",
+        state: match ? "pass" : "fail",
+        detail: match
+          ? `On-chain digest at block ${onchain.latestBlock}: ${onchain.latestDigest}`
+          : `Agent reports ${expected.appDigest} but chain has ${onchain.latestDigest} (block ${onchain.latestBlock}).`,
+        link: { href: onchain.verifyDashboardURL, text: "view on verify.eigencloud.xyz" },
+      });
+    } else {
+      steps.push({
+        label: "On-chain image-digest binding",
+        state: "fail",
+        detail: onchain.reason,
+        link: onchain.verifyDashboardURL
+          ? { href: onchain.verifyDashboardURL, text: "verify dashboard" }
+          : undefined,
+      });
+    }
+  }
+
+  // ─── 4. EigenAI receipt (per-response signed receipt from the gateway) ──
   const eigenaiMessage =
     v.eigenai_request_messages.join("") +
     v.eigenai_response_messages.join("") +
     att.data.eigenai_model +
     String(v.eigenai_chain_id);
 
-  const stubModel =
-    typeof att.data.eigenai_model === "string" &&
-    att.data.eigenai_model.startsWith("stub:");
-  const sigPresent = !!(
-    att.eigenai_signature && att.eigenai_signature.length > 4
-  );
+  const stubModel = att.data.eigenai_model?.startsWith("stub:") ?? false;
+  const sigPresent =
+    !!att.eigenai_signature && att.eigenai_signature.length > 4;
 
   let eaiSigner: string | null = null;
   if (sigPresent) {
     try {
       eaiSigner = verifyMessage(eigenaiMessage, att.eigenai_signature);
-    } catch (e) {
-      steps.push({ label: "Recover EigenAI signer", ok: false, detail: String(e) });
+    } catch {
+      eaiSigner = null;
     }
+    const keyRegistrar =
+      KEY_REGISTRAR[v.eigenai_chain_id] || KEY_REGISTRAR[expected.appRegistryChainId];
     steps.push({
-      label: "EigenAI signature recovered",
-      ok: !!eaiSigner,
+      label: "EigenAI operator signed the inference receipt",
+      state: eaiSigner ? "pass" : "fail",
       detail: eaiSigner
-        ? `recovered ${shorten(eaiSigner)} (look up in KeyRegistrar)`
-        : "signature did not recover",
+        ? `Recovered ${shorten(eaiSigner)} — cross-check against KeyRegistrar on chain ${v.eigenai_chain_id || expected.appRegistryChainId}.`
+        : "Signature did not recover.",
+      link: keyRegistrar
+        ? {
+            href: `https://${
+              (v.eigenai_chain_id || expected.appRegistryChainId) === 1
+                ? "etherscan.io"
+                : "sepolia.etherscan.io"
+            }/address/${keyRegistrar}`,
+            text: "open KeyRegistrar on Etherscan",
+          }
+        : undefined,
     });
   } else if (stubModel) {
     steps.push({
-      label: "EigenAI signature — skipped (local stub mode)",
-      ok: true,
-      detail: "Inference is stubbed off-TEE; the deployed agent calls the AI Gateway and returns a real signed receipt.",
+      label: "EigenAI receipt — local stub mode",
+      state: "note",
+      detail:
+        "Inference was stubbed (no JWT). The deployed agent calls the live AI Gateway and the receipt step engages there.",
     });
   } else {
     steps.push({
-      label: "EigenAI signature recovered",
-      ok: false,
-      detail: "no signature attached",
+      label: "EigenAI receipt — gateway did not publish a signature",
+      state: "note",
+      detail:
+        "The dev gateway is shipping receipts in stages (whitepaper §6.7). The request/response bytes and model id are recorded above; once the gateway publishes per-response signatures we can recover the operator key here.",
     });
   }
 
-  // 3. App digest binding — published in the on-chain registry.
-  const digestMatch =
-    !!att.data.app_digest &&
-    att.data.app_digest === expected.appDigest;
-  steps.push({
-    label: `app_digest matches the on-chain registry`,
-    ok: digestMatch,
-    detail: att.data.app_digest,
-  });
-
   return {
-    agentSignerOk,
     agentRecoveredAddress: agentRecovered,
     expectedSigner: expected.agentAddress,
     eigenaiSignerRecovered: eaiSigner,
     eigenaiMessage,
-    eigenaiSignaturePresent: !!sigPresent,
-    digestMatch,
-    appDigest: att.data.app_digest,
+    eigenaiSignaturePresent: sigPresent,
+    eigenaiKeyRegistrar:
+      KEY_REGISTRAR[v.eigenai_chain_id || expected.appRegistryChainId] || "",
+    eigenaiKeyRegistrarChainId: v.eigenai_chain_id || expected.appRegistryChainId,
+    onchain,
     steps,
   };
 }
+
+export { verifyDashboardUrl };
 
 function shorten(addr: string): string {
   if (!addr) return "—";

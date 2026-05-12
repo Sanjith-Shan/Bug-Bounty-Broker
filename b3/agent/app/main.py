@@ -55,6 +55,8 @@ def health() -> HealthResponse:
         status="ok",
         agent_address=addr,
         app_digest=s.APP_DIGEST_PUBLIC,
+        app_id=s.APP_ID_PUBLIC or None,
+        app_registry_chain_id=s.APP_REGISTRY_CHAIN_ID_PUBLIC,
         supported_chains=s.supported_chains,
         fee_bps=s.FEE_BPS_PUBLIC,
         domain=s.DOMAIN or None,

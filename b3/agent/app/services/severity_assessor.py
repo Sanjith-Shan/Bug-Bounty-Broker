@@ -134,16 +134,25 @@ async def _call_gateway(
     return result
 
 
-def _extract_signature(response_body: dict) -> tuple[str, int]:
-    """Best-effort recovery of the EigenAI signature + chain_id from the gateway body.
+def _extract_signature(
+    response_body: dict, response_headers: dict | None = None,
+) -> tuple[str, int]:
+    """Best-effort recovery of the EigenAI signature + chain_id.
 
-    The exact field layout is governed by the verify-signature spec and may
-    change. We try a few well-known shapes and fall back to empty strings.
+    The AI Gateway is still moving toward the EigenAI whitepaper's full
+    receipt format (Algorithm 1, §6.7) — different builds put the signature
+    in different places. We look in three locations, in order:
+      1. Top-level `signature` / `chain_id` (older direct-EigenAI shape)
+      2. `receipt.sig` / `receipt.chain_id` (whitepaper shape)
+      3. Response headers `x-eigen-signature` / `x-eigen-chain-id`
+         (gateway header shape — seen on some recent builds)
+    Returns ("", 0) if no receipt is published yet, which is the honest
+    state of the alpha gateway today; the frontend renders this as a
+    "not yet emitted" step rather than a green check.
     """
     sig = ""
     chain_id = 0
 
-    # Top-level signature (older shape)
     if isinstance(response_body.get("signature"), str):
         sig = response_body["signature"]
     if isinstance(response_body.get("chain_id"), int):
@@ -151,7 +160,6 @@ def _extract_signature(response_body: dict) -> tuple[str, int]:
     elif isinstance(response_body.get("chainId"), int):
         chain_id = response_body["chainId"]
 
-    # Whitepaper "receipt" shape
     receipt = response_body.get("receipt") or {}
     if not sig and isinstance(receipt.get("sig"), str):
         sig = receipt["sig"]
@@ -159,6 +167,19 @@ def _extract_signature(response_body: dict) -> tuple[str, int]:
         cid = receipt.get("chainid") or receipt.get("chain_id") or receipt.get("chainId")
         if isinstance(cid, int):
             chain_id = cid
+
+    headers = {k.lower(): v for k, v in (response_headers or {}).items()}
+    if not sig:
+        hsig = headers.get("x-eigen-signature") or headers.get("x-eigenai-signature")
+        if isinstance(hsig, str) and hsig:
+            sig = hsig
+    if not chain_id:
+        hcid = headers.get("x-eigen-chain-id") or headers.get("x-eigenai-chain-id")
+        try:
+            if hcid:
+                chain_id = int(hcid)
+        except (TypeError, ValueError):
+            pass
 
     if sig and not sig.startswith("0x"):
         sig = "0x" + sig
@@ -234,9 +255,10 @@ async def assess_severity(
 
     response_text = result.get("text", "") or ""
     response_body = result.get("response_body") or {}
+    response_headers = result.get("response_headers") or {}
     parsed = _extract_json(response_text)
 
-    eai_sig, eai_chain_id = _extract_signature(response_body)
+    eai_sig, eai_chain_id = _extract_signature(response_body, response_headers)
 
     response_messages = []
     for c in response_body.get("choices") or []:

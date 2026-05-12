@@ -19,6 +19,8 @@ export type Health = {
   status: string;
   agent_address: string;
   app_digest: string;
+  app_id?: string | null;
+  app_registry_chain_id?: number;
   supported_chains: number[];
   fee_bps: number;
   domain?: string | null;
