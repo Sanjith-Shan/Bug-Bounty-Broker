@@ -83,7 +83,7 @@ export type SubmitResponse = {
   instructions: string;
 };
 
-export const api = {
+const realApi = {
   health:        () => req<Health>("/health"),
   programs:      () => req<Program[]>("/bounties"),
   program:       (id: string) => req<Program>(`/bounties/${id}`),
@@ -100,3 +100,29 @@ export const api = {
     req<{ attestation_id: string; poc_solidity: string; forge_output: string; funds_at_risk_usd: number; severity: string }>(
       `/report/${id}`),
 };
+
+// Mock mode: set VITE_MOCK_MODE=true (e.g. `VITE_MOCK_MODE=true npm run dev`) to
+// run the entire UI without any backend. Used for the offline Demo Day path —
+// everything is hardcoded, latency is ~5ms, but the cryptographic signatures
+// in the verify ceremony are real and recover correctly client-side.
+const useMock = import.meta.env.VITE_MOCK_MODE === "true";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _api: any = realApi;
+if (useMock) {
+  // Async import so the mock module isn't bundled in the real-API build.
+  // Until it resolves, real-API requests will still work as a fallback.
+  import("./mockApi").then((m) => {
+    _api = m.mockApi;
+    if (typeof window !== "undefined") {
+      (window as unknown as { __MOCK__: boolean }).__MOCK__ = true;
+      // eslint-disable-next-line no-console
+      console.info("[b3] mock mode active");
+    }
+  });
+}
+
+export const api = new Proxy({} as typeof realApi, {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  get: (_t, prop) => (_api as any)[prop as string],
+});

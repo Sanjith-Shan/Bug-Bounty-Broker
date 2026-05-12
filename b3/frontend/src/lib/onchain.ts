@@ -144,6 +144,13 @@ export async function readLatestAppRelease(
   appAddress: Address,
   chainId: number,
 ): Promise<OnchainAppState | OnchainAppError> {
+  // Demo Day mock mode: skip the RPC entirely, return a pre-baked green state.
+  // The lib/mockApi module owns the fixture so it stays in sync with the
+  // hardcoded /health + /verify responses.
+  if (import.meta.env.VITE_MOCK_MODE === "true") {
+    const { mockOnchainState } = await import("./mockApi");
+    return { ...mockOnchainState, appAddress } as OnchainAppState;
+  }
   const ac = APP_CONTROLLER[chainId];
   if (!ac) {
     return { ok: false, reason: `AppController not deployed on chain ${chainId}`, chainId };
