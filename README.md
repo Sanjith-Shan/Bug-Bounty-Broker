@@ -1,5 +1,7 @@
 # B³ — Bug Bounty Broker
 
+🏆 1st Place Overall @ Eigen Labs Agent Hackathon
+
 > A neutral, TEE-sealed agent that verifies bug bounty submissions
 > **without revealing them first**, produces a deterministic CVSS attestation,
 > and only releases the exploit details after the bounty is paid.
