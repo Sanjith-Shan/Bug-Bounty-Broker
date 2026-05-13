@@ -1,10 +1,10 @@
 # B³ — Bug Bounty Broker
 
-> A neutral, TEE-sealed agent that verifies smart-contract vulnerabilities
+> A neutral, TEE-sealed agent that verifies bug bounty submissions
 > **without revealing them first**, produces a deterministic CVSS attestation,
 > and only releases the exploit details after the bounty is paid.
 
-Live at **<https://b3-frontend-tawny.vercel.app/>**.
+Live at **<https://b3-broker.vercel.app>**.
 
 ---
 
